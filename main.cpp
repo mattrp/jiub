@@ -1,49 +1,51 @@
-#include <iostream>
-#include <string>
-#include <thread>
-#include <deque>
-#include <mutex>
-#include <chrono>
-#include "out.h"
-#include "in.h"
+#include "main.h"
+#include "global.h"
+#include "in_handlr.h"
+#include "out_handlr.h"
 
-std::mutex mu;
-std::deque<std::string> input;
-int running;
 
-void inChannel() {
-    std::string thisInput = "initialize";
-    while (thisInput != "q") {
-        getline(std::cin, thisInput);
-        mu.lock();
-        input.push_back(thisInput);
-        mu.unlock();
+void process_input() {
+    std::string prefix("--foo=");
+    for (std::string s : local_input_memory) { 
+        if (s == "q") {
+            running = 0;
+            break;
+        } else if (!s.compare(0, prefix.size(), prefix)) {
+            int foo_value = atoi(s.substr(prefix.size()).c_str());
+            local_output_memory.push_back("Foo: " + std::to_string(foo_value));
+        } else {
+            local_output_memory.push_back("Unknown Command: " + s);
+        }
     }
-    running = 0;
 }
 
-
-void outChannel() {
-    running = 1;
-    std::cout << ":> ";
-    std::deque<std::string> inputcontainer;
-    std::deque<std::string> outputcontainer;
+void main_thread() {
     while (running == 1) {
-        if (input.size() > 0) {
-            mu.lock();
-            inputcontainer = input;
-            input.clear();
-            mu.unlock();
-        }
-        processInput(inputcontainer, outputcontainer);
-        out(outputcontainer);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        input_mutex.lock();
+        local_input_memory = shared_input_memory;
+        shared_input_memory.clear();
+        input_mutex.unlock();
+
+        process_input();
+
+        std::unique_lock<std::mutex> locker(output_mutex);
+        shared_output_memory = local_output_memory;
+        locker.unlock();
+        output_ready.notify_all();
+        local_output_memory.clear();
     }
 }
 
 int main() {
-    std::thread t1(inChannel);
-    std::thread t2(outChannel);
-    t1.join();
-    t2.join();
-}
+    running = 1;
 
+    std::thread t1(out_handlr);
+    std::thread t2(in_handlr);
+
+    main_thread();
+
+    t2.join();
+    t1.join();
+}
